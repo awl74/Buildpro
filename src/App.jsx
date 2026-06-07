@@ -822,9 +822,6 @@ const EstimatorView = ({ estimates, setEstimates, onCreateContract }) => {
       table{width:100%;border-collapse:collapse;margin-bottom:20px;font-size:12px}
       th{background:#1c2333;color:#fff;padding:9px 11px;text-align:left;font-size:11px;letter-spacing:.5px}
       td{border-bottom:1px solid #eee;padding:8px 11px;vertical-align:top}
-      .ref-row td{background:#f0f7ff;font-size:11px;color:#555;padding:3px 11px 8px;border-bottom:1px solid #dde}
-      .pill{display:inline-block;padding:1px 7px;border-radius:10px;font-size:10px;font-weight:bold;margin-right:5px}
-      .low{background:#dcfce7;color:#166534}.avg{background:#dbeafe;color:#1e40af}.high{background:#fee2e2;color:#991b1b}
       .totals-box{float:right;width:280px;border:1px solid #eee;border-radius:4px;overflow:hidden;margin-top:10px}
       .totals-box .row{display:flex;justify-content:space-between;padding:8px 14px;border-bottom:1px solid #eee}
       .grand{background:#f59e0b;color:#000;font-weight:bold;font-size:15px}
@@ -832,7 +829,6 @@ const EstimatorView = ({ estimates, setEstimates, onCreateContract }) => {
       @media print{body{margin:20px auto}.disc{margin-top:20px}}
     </style></head><body>
     <h1>ESTIMATE</h1>
-    <div class="subtitle">Pricing reference: CSI MasterFormat · National average cost data (2024)</div>
     <div class="meta">
       <div>
         <p><strong>Client:</strong> ${c.clientName||"—"}</p>
@@ -855,19 +851,14 @@ const EstimatorView = ({ estimates, setEstimates, onCreateContract }) => {
     ${items.map(i => {
       const lt = (parseFloat(i.qty)||0)*(parseFloat(i.unitCost)||0)*(1+(parseFloat(i.markup)||0)/100);
       const ref = getPriceRef(i.subDivision);
-      const direction = ref && parseFloat(i.unitCost) > 0 ? (parseFloat(i.unitCost) < ref.avg ? "▼ below avg" : "▲ above avg") : "";
       return `<tr>
         <td><strong style="font-size:11px">${i.category||""}</strong>${i.subDivision?`<br><span style="color:#666;font-size:10px">${i.subDivision}</span>`:""}</td>
         <td>${i.description||(ref?.desc||"—")}</td>
         <td>${i.qty}</td><td>${i.unit}</td>
-        <td>$${parseFloat(i.unitCost||0).toFixed(2)}${direction?`<br><span style="font-size:10px;color:${parseFloat(i.unitCost)<(ref?.avg||0)?'#166534':'#991b1b'}">${direction}</span>`:""}</td>
+        <td>$${parseFloat(i.unitCost||0).toFixed(2)}</td>
         <td>${i.markup}%</td>
         <td><strong>$${lt.toFixed(2)}</strong></td>
-      </tr>${ref?`<tr class="ref-row"><td colspan="7">Ref: ${ref.desc} per ${ref.unit} —
-        <span class="pill low">Low $${ref.low}</span>
-        <span class="pill avg">Avg $${ref.avg}</span>
-        <span class="pill high">High $${ref.high}</span>
-      </td></tr>`:""}`;
+      </tr>`;
     }).join("")}
     </tbody></table>
     <div class="totals-box">
@@ -875,7 +866,7 @@ const EstimatorView = ({ estimates, setEstimates, onCreateContract }) => {
       <div class="row"><span>Markup / Overhead</span><span>$${mkp.toFixed(2)}</span></div>
       <div class="row grand"><span>TOTAL ESTIMATE</span><span>$${tot.toFixed(2)}</span></div>
     </div>
-    <div class="disc">Reference pricing from national average construction cost data (RSMeans/Gordian 2024). Costs vary by region, labor market, and site conditions. Estimate valid 30 days.</div>
+    <div class="disc">This estimate is valid for 30 days from the date above. Prices subject to change based on final scope, material availability, and site conditions.</div>
     ${c.notes?`<p style="margin-top:20px;font-size:12px"><strong>Notes:</strong> ${c.notes}</p>`:""}
     </body></html>`;
 
@@ -1226,17 +1217,73 @@ const ConfirmModal = ({ show, title, message, detail, confirmLabel, confirmColor
   );
 };
 
-const ContractView = ({ contracts, setContracts }) => {
+const ContractView = ({ contracts, setContracts, onProjectCreate }) => {
   const isMobile = useIsMobile();
   const [view, setView] = useState("list");
   const [activeId, setActiveId] = useState(null);
   const [form, setForm] = useState({});
-  const [modal, setModal] = useState(null); // { type: "send" | "sign" }
+  const [modal, setModal] = useState(null); // { type: "send" | "sign" | "noEmail" }
 
   const open = (c) => { setForm({ ...c }); setActiveId(c.id); setView("form"); };
   const save = () => {
     setContracts(p => p.map(c => c.id === activeId ? { ...c, ...form } : c));
     if (isMobile) setView("list");
+  };
+
+  // Intercept status dropdown — show sign confirmation before committing
+  const handleStatusChange = (newStatus) => {
+    if (newStatus === "Signed" && form.status !== "Signed") {
+      setModal({ type: "sign", pendingStatus: "Signed" });
+    } else {
+      setForm(f => ({ ...f, status: newStatus }));
+    }
+  };
+
+  const confirmSign = () => {
+    const signedForm = { ...form, status: "Signed", signedAt: new Date().toISOString() };
+    setForm(signedForm);
+    setContracts(p => p.map(c => c.id === activeId ? { ...c, ...signedForm } : c));
+    setModal(null);
+
+    // Auto-create project from signed contract
+    const total = parseFloat(signedForm.contractValue) || calcTotal(signedForm);
+    const newProject = {
+      id: uid(),
+      name: signedForm.projectAddress || signedForm.clientName || "New Project",
+      client: signedForm.clientName || "",
+      clientPhone: signedForm.clientPhone || "",
+      clientEmail: signedForm.clientEmail || "",
+      address: signedForm.projectAddress || "",
+      status: "Not Started",
+      phase: "Pre-Construction",
+      startDate: signedForm.startDate || "",
+      endDate: signedForm.endDate || "",
+      budget: total,
+      spent: 0,
+      contractId: activeId,
+      contractorName: signedForm.contractorName || "",
+      licenseNum: signedForm.licenseNum || "",
+      permitNum: signedForm.permitNum || "",
+      scopeDetails: signedForm.scopeDetails || signedForm.notes || "",
+      exclusions: signedForm.exclusions || "",
+      clientResponsibilities: signedForm.clientResponsibilities || "",
+      depositPct: signedForm.depositPct || 30,
+      progressPct: signedForm.progressPct || 40,
+      tasks: [
+        { id: uid(), name: "Collect deposit payment", done: false, due: signedForm.startDate || "" },
+        { id: uid(), name: "Pull permits", done: false, due: "" },
+        { id: uid(), name: "Site preparation & mobilization", done: false, due: signedForm.startDate || "" },
+        { id: uid(), name: "Schedule subcontractors", done: false, due: "" },
+        { id: uid(), name: "Order materials", done: false, due: "" },
+        { id: uid(), name: "Final walkthrough with client", done: false, due: signedForm.endDate || "" },
+        { id: uid(), name: "Punch list completion", done: false, due: "" },
+        { id: uid(), name: "Collect final payment", done: false, due: signedForm.endDate || "" },
+      ],
+      changeOrders: [],
+      createdFromContract: true,
+    };
+
+    onProjectCreate(newProject);
   };
 
   // Keep form in sync when the parent auto-syncs estimate changes into contracts
@@ -1261,8 +1308,13 @@ const ContractView = ({ contracts, setContracts }) => {
       }}>
         <span style={{ fontSize: 16 }}>🔒</span>
         <div>
-          <div style={{ fontSize: 13, fontWeight: 700, color: G.green }}>Contract Locked — Signed</div>
-          <div style={{ fontSize: 12, color: G.muted }}>Estimate changes will no longer sync to this contract.</div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: G.green }}>
+            Contract Signed & Locked
+            {form.signedAt && <span style={{ fontWeight: 400, color: G.muted }}> · {new Date(form.signedAt).toLocaleDateString()}</span>}
+          </div>
+          <div style={{ fontSize: 12, color: G.muted }}>
+            Estimate changes will no longer sync. A project was automatically created from this contract.
+          </div>
         </div>
       </div>
     );
@@ -1438,7 +1490,7 @@ ${form.contractorEmail || ""}`);
           </div>
           <div>
             <Label>Contract Status</Label>
-            <select value={form.status || "Draft"} onChange={e => setForm(f => ({ ...f, status: e.target.value }))}>
+            <select value={form.status || "Draft"} onChange={e => handleStatusChange(e.target.value)}>
               {["Draft", "Sent", "Signed", "Void"].map(s => <option key={s}>{s}</option>)}
             </select>
           </div>
@@ -1542,6 +1594,16 @@ ${form.contractorEmail || ""}`);
       </div>
       {contractFormJSX}
       <ConfirmModal
+        show={modal?.type === "sign"}
+        title="Mark as Signed?"
+        message={`Lock contract & create project for ${form.clientName || "this client"}?`}
+        detail={`A new project will be created with:\n• Client: ${form.clientName || "—"}\n• Address: ${form.projectAddress || "—"}\n• Budget: ${fmtExact(parseFloat(form.contractValue) || calcTotal(form))}\n• Dates: ${form.startDate || "TBD"} → ${form.endDate || "TBD"}\n• 8 starter tasks pre-loaded\n\nContract will be locked and can no longer be edited.`}
+        confirmLabel="✅ Sign & Create Project"
+        confirmColor={G.green}
+        onConfirm={confirmSign}
+        onCancel={() => setModal(null)}
+      />
+      <ConfirmModal
         show={modal?.type === "send"}
         title="Send Contract"
         message={`Send this contract to ${form.clientName}?`}
@@ -1623,6 +1685,16 @@ ${form.contractorEmail || ""}`);
           )}
           {contractFormJSX}
           <ConfirmModal
+            show={modal?.type === "sign"}
+            title="Mark as Signed?"
+            message={`Lock contract & create project for ${form.clientName || "this client"}?`}
+            detail={`A new project will be created with:\n• Client: ${form.clientName || "—"}\n• Address: ${form.projectAddress || "—"}\n• Budget: ${fmtExact(parseFloat(form.contractValue) || calcTotal(form))}\n• Dates: ${form.startDate || "TBD"} → ${form.endDate || "TBD"}\n• 8 starter tasks pre-loaded\n\nContract will be locked and can no longer be edited.`}
+            confirmLabel="✅ Sign & Create Project"
+            confirmColor={G.green}
+            onConfirm={confirmSign}
+            onCancel={() => setModal(null)}
+          />
+          <ConfirmModal
             show={modal?.type === "send"}
             title="Send Contract"
             message={`Send this contract to ${form.clientName}?`}
@@ -1684,9 +1756,9 @@ const ProjectsView = ({ projects, setProjects }) => {
   const revisedBudget = parseFloat(form.budget || 0) + approvedCOs;
   const remaining = revisedBudget - parseFloat(form.spent || 0);
 
-  const SubTabs = () => (
+  const subTabsJSX = (
     <div style={{ display: "flex", gap: 6, padding: isMobile ? "10px 16px" : "0 0 20px", background: isMobile ? G.surface : "transparent", borderBottom: isMobile ? `1px solid ${G.border}` : "none" }}>
-      {[["details", "📋 Details"], ["tasks", `✅ Tasks (${tasks.length})`], ["changes", `🔄 Change Orders (${changeOrders.length})`]].map(([id, label]) => (
+      {[["details", "📋 Details"], ["tasks", `✅ Tasks (${tasks.length})`], ["changes", `🔄 Changes (${changeOrders.length})`]].map(([id, label]) => (
         <button key={id} onClick={() => setSubView(id)} style={{
           padding: "8px 14px", borderRadius: 10, fontSize: 13, fontWeight: subView === id ? 700 : 500,
           background: subView === id ? G.accent + "22" : "transparent",
@@ -1697,18 +1769,30 @@ const ProjectsView = ({ projects, setProjects }) => {
     </div>
   );
 
-  const DetailsTab = () => (
+  const detailsJSX = (
     <div style={{ padding: isMobile ? 16 : 0 }}>
       <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 14, marginBottom: 14 }}>
         <Card>
           <Field label="Project Name" value={form.name || ""} onChange={v => setForm(f => ({ ...f, name: v }))} placeholder="Kitchen Remodel" />
           <Field label="Client" value={form.client || ""} onChange={v => setForm(f => ({ ...f, client: v }))} />
+          <Field label="Client Phone" value={form.clientPhone || ""} onChange={v => setForm(f => ({ ...f, clientPhone: v }))} placeholder="(555) 000-0000" type="tel" />
+          <Field label="Client Email" value={form.clientEmail || ""} onChange={v => setForm(f => ({ ...f, clientEmail: v }))} placeholder="client@email.com" type="email" />
           <Field label="Address" value={form.address || ""} onChange={v => setForm(f => ({ ...f, address: v }))} />
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <div><Label>Status</Label><select value={form.status || "Not Started"} onChange={e => setForm(f => ({ ...f, status: e.target.value }))}>{Object.keys(STATUS_C).map(s => <option key={s}>{s}</option>)}</select></div>
-            <div><Label>Phase</Label><select value={form.phase || "Pre-Construction"} onChange={e => setForm(f => ({ ...f, phase: e.target.value }))}>{PHASES.map(p => <option key={p}>{p}</option>)}</select></div>
+            <div>
+              <Label>Status</Label>
+              <select value={form.status || "Not Started"} onChange={e => setForm(f => ({ ...f, status: e.target.value }))}>
+                {Object.keys(STATUS_C).map(s => <option key={s}>{s}</option>)}
+              </select>
+            </div>
+            <div>
+              <Label>Phase</Label>
+              <select value={form.phase || "Pre-Construction"} onChange={e => setForm(f => ({ ...f, phase: e.target.value }))}>
+                {PHASES.map(p => <option key={p}>{p}</option>)}
+              </select>
+            </div>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 4 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
             <Field label="Start Date" value={form.startDate || ""} onChange={v => setForm(f => ({ ...f, startDate: v }))} type="date" />
             <Field label="End Date" value={form.endDate || ""} onChange={v => setForm(f => ({ ...f, endDate: v }))} type="date" />
           </div>
@@ -1716,6 +1800,7 @@ const ProjectsView = ({ projects, setProjects }) => {
         <Card>
           <Field label="Contract Budget ($)" value={form.budget || ""} onChange={v => setForm(f => ({ ...f, budget: v }))} type="number" min="0" />
           <Field label="Amount Spent ($)" value={form.spent || ""} onChange={v => setForm(f => ({ ...f, spent: v }))} type="number" min="0" />
+          {form.permitNum !== undefined && <Field label="Permit #" value={form.permitNum || ""} onChange={v => setForm(f => ({ ...f, permitNum: v }))} placeholder="Permit number" />}
           <div style={{ background: G.bg, borderRadius: 12, padding: 16, marginTop: 4 }}>
             {[["Approved COs", fmtExact(approvedCOs), G.blue], ["Revised Budget", fmtExact(revisedBudget), G.text], ["Remaining", fmtExact(remaining), remaining >= 0 ? G.green : G.red]].map(([l, v, c]) => (
               <div key={l} style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
@@ -1730,16 +1815,21 @@ const ProjectsView = ({ projects, setProjects }) => {
               {Math.round(((form.spent || 0) / (revisedBudget || 1)) * 100)}% spent
             </div>
           </div>
+          {form.scopeDetails && (
+            <div style={{ marginTop: 14 }}>
+              <Field label="Scope of Work" value={form.scopeDetails || ""} onChange={v => setForm(f => ({ ...f, scopeDetails: v }))} multiline rows={4} />
+            </div>
+          )}
         </Card>
       </div>
     </div>
   );
 
-  const TasksTab = () => (
+  const tasksJSX = (
     <div style={{ padding: isMobile ? 16 : 0 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
         <div style={{ fontSize: 14, color: G.muted }}>{tasks.filter(t => t.done).length} of {tasks.length} complete</div>
-        <Btn variant="ghost" onClick={() => setForm(f => ({ ...f, tasks: [...tasks, { id: uid(), name: "", done: false, due: "" }] }))} style={{ padding: "8px 14px", fontSize: 13 }}>+ Task</Btn>
+        <Btn variant="ghost" onClick={() => setForm(f => ({ ...f, tasks: [...(f.tasks || []), { id: uid(), name: "", done: false, due: "" }] }))} style={{ padding: "8px 14px", fontSize: 13 }}>+ Task</Btn>
       </div>
       <div style={{ background: G.bg, borderRadius: 8, height: 8, marginBottom: 16 }}>
         <div style={{ width: donePct + "%", height: "100%", background: G.green, borderRadius: 8, transition: "width .3s" }} />
@@ -1748,21 +1838,26 @@ const ProjectsView = ({ projects, setProjects }) => {
         <Card key={task.id} style={{ marginBottom: 10, padding: "12px 14px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <button
-              onClick={() => setForm(f => ({ ...f, tasks: tasks.map(t => t.id === task.id ? { ...t, done: !t.done } : t) }))}
+              onClick={() => setForm(f => ({ ...f, tasks: (f.tasks || []).map(t => t.id === task.id ? { ...t, done: !t.done } : t) }))}
               style={{
                 width: 28, height: 28, borderRadius: 8, border: `2px solid ${task.done ? G.green : G.border}`,
                 background: task.done ? G.green : "transparent", flexShrink: 0,
                 display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, color: "#000",
               }}
             >{task.done ? "✓" : ""}</button>
-            <input value={task.name} onChange={e => setForm(f => ({ ...f, tasks: tasks.map(t => t.id === task.id ? { ...t, name: e.target.value } : t) }))}
+            <input
+              value={task.name}
+              onChange={e => { const v = e.target.value; setForm(f => ({ ...f, tasks: (f.tasks || []).map(t => t.id === task.id ? { ...t, name: v } : t) })); }}
               placeholder="Task description"
               style={{ flex: 1, textDecoration: task.done ? "line-through" : "none", color: task.done ? G.muted : G.text, fontSize: 15 }}
             />
-            <input type="date" value={task.due} onChange={e => setForm(f => ({ ...f, tasks: tasks.map(t => t.id === task.id ? { ...t, due: e.target.value } : t) }))}
+            <input
+              type="date"
+              value={task.due}
+              onChange={e => { const v = e.target.value; setForm(f => ({ ...f, tasks: (f.tasks || []).map(t => t.id === task.id ? { ...t, due: v } : t) })); }}
               style={{ width: isMobile ? 130 : 160, fontSize: 14 }}
             />
-            <button onClick={() => setForm(f => ({ ...f, tasks: tasks.filter(t => t.id !== task.id) }))}
+            <button onClick={() => setForm(f => ({ ...f, tasks: (f.tasks || []).filter(t => t.id !== task.id) }))}
               style={{ background: "none", border: "none", color: G.red, fontSize: 20, flexShrink: 0 }}>×</button>
           </div>
         </Card>
@@ -1771,28 +1866,32 @@ const ProjectsView = ({ projects, setProjects }) => {
     </div>
   );
 
-  const ChangesTab = () => (
+  const changesJSX = (
     <div style={{ padding: isMobile ? 16 : 0 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
         <div style={{ fontSize: 14, color: G.muted }}>{changeOrders.filter(c => c.status === "Approved").length} approved · {fmtExact(approvedCOs)} added</div>
-        <Btn variant="ghost" onClick={() => setForm(f => ({ ...f, changeOrders: [...changeOrders, { id: uid(), description: "", amount: 0, status: "Pending", date: today() }] }))} style={{ padding: "8px 14px", fontSize: 13 }}>+ Change Order</Btn>
+        <Btn variant="ghost" onClick={() => setForm(f => ({ ...f, changeOrders: [...(f.changeOrders || []), { id: uid(), description: "", amount: 0, status: "Pending", date: today() }] }))} style={{ padding: "8px 14px", fontSize: 13 }}>+ Change Order</Btn>
       </div>
       {changeOrders.map(co => (
         <Card key={co.id} style={{ marginBottom: 12 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, marginBottom: 10 }}>
-            <input value={co.description} onChange={e => setForm(f => ({ ...f, changeOrders: changeOrders.map(c => c.id === co.id ? { ...c, description: e.target.value } : c) }))}
-              placeholder="Change order description" style={{ flex: 1 }} />
-            <button onClick={() => setForm(f => ({ ...f, changeOrders: changeOrders.filter(c => c.id !== co.id) }))}
+            <input
+              value={co.description}
+              onChange={e => { const v = e.target.value; setForm(f => ({ ...f, changeOrders: (f.changeOrders || []).map(c => c.id === co.id ? { ...c, description: v } : c) })); }}
+              placeholder="Change order description" style={{ flex: 1 }}
+            />
+            <button onClick={() => setForm(f => ({ ...f, changeOrders: (f.changeOrders || []).filter(c => c.id !== co.id) }))}
               style={{ background: "none", border: "none", color: G.red, fontSize: 22, flexShrink: 0 }}>×</button>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <div>
               <Label>Amount ($)</Label>
-              <input type="number" value={co.amount} onChange={e => setForm(f => ({ ...f, changeOrders: changeOrders.map(c => c.id === co.id ? { ...c, amount: e.target.value } : c) }))} />
+              <input type="number" value={co.amount}
+                onChange={e => { const v = e.target.value; setForm(f => ({ ...f, changeOrders: (f.changeOrders || []).map(c => c.id === co.id ? { ...c, amount: v } : c) })); }} />
             </div>
             <div>
               <Label>Status</Label>
-              <select value={co.status} onChange={e => setForm(f => ({ ...f, changeOrders: changeOrders.map(c => c.id === co.id ? { ...c, status: e.target.value } : c) }))}>
+              <select value={co.status} onChange={e => { const v = e.target.value; setForm(f => ({ ...f, changeOrders: (f.changeOrders || []).map(c => c.id === co.id ? { ...c, status: v } : c) })); }}>
                 {["Pending", "Approved", "Rejected"].map(s => <option key={s}>{s}</option>)}
               </select>
             </div>
@@ -1851,10 +1950,10 @@ const ProjectsView = ({ projects, setProjects }) => {
         onBack={() => setView("list")}
         right={<Btn onClick={save} style={{ padding: "8px 14px", fontSize: 13 }}>💾 Save</Btn>}
       />
-      <SubTabs />
-      {subView === "details" && <DetailsTab />}
-      {subView === "tasks" && <TasksTab />}
-      {subView === "changes" && <ChangesTab />}
+      {subTabsJSX}
+      {subView === "details" && detailsJSX}
+      {subView === "tasks" && tasksJSX}
+      {subView === "changes" && changesJSX}
     </div>
   );
 
@@ -1890,11 +1989,11 @@ const ProjectsView = ({ projects, setProjects }) => {
             <SectionTitle title={form.name || "New Project"} sub={form.client} />
             <Btn variant="ghost" onClick={save}>💾 Save</Btn>
           </div>
-          <SubTabs />
+          {subTabsJSX}
           <div style={{ marginTop: 16 }}>
-            {subView === "details" && <DetailsTab />}
-            {subView === "tasks" && <TasksTab />}
-            {subView === "changes" && <ChangesTab />}
+            {subView === "details" && detailsJSX}
+            {subView === "tasks" && tasksJSX}
+            {subView === "changes" && changesJSX}
           </div>
         </div>
       )}
@@ -2246,6 +2345,14 @@ export default function App() {
     setTab("contract");
   };
 
+  const handleProjectCreate = (newProject) => {
+    // Avoid duplicates — don't create if a project already exists for this contract
+    const exists = projects.find(p => p.contractId === newProject.contractId);
+    if (exists) { setTab("projects"); return; }
+    setProjects(p => [newProject, ...p]);
+    setTab("projects");
+  };
+
   // Auto-sync estimate changes → linked unsigned contracts
   useEffect(() => {
     _setContracts(prev => {
@@ -2297,7 +2404,7 @@ export default function App() {
 
   const views = {
     estimate: <EstimatorView estimates={estimates} setEstimates={setEstimates} onCreateContract={handleCreateContract} />,
-    contract: <ContractView contracts={contracts} setContracts={setContracts} />,
+    contract: <ContractView contracts={contracts} setContracts={setContracts} onProjectCreate={handleProjectCreate} />,
     projects: <ProjectsView projects={projects} setProjects={setProjects} />,
     invoices: <InvoicesView invoices={invoices} setInvoices={setInvoices} estimates={estimates} />,
   };
@@ -2339,4 +2446,3 @@ export default function App() {
     </>
   );
 }
-
